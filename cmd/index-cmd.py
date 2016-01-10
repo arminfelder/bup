@@ -7,6 +7,7 @@ exec "$bup_python" "$0" ${1+"$@"}
 
 import sys, stat, time, os, errno, re
 from bup import metadata, options, git, index, drecurse, hlinkdb
+from bup.drecurse import recursive_dirlist
 from bup.helpers import *
 from bup.hashsplit import GIT_MODE_TREE, GIT_MODE_FILE
 
@@ -67,7 +68,7 @@ def clear_index(indexfile):
                 raise
 
 
-def update_index(top, excluded_paths, exclude_rxs):
+def update_index(top, excluded_paths, exclude_rxs, xdev_exceptions):
     # tmax and start must be epoch nanoseconds.
     tmax = (time.time() - 1) * 10**9
     ri = index.Reader(indexfile)
@@ -86,10 +87,12 @@ def update_index(top, excluded_paths, exclude_rxs):
     total = 0
     bup_dir = os.path.abspath(git.repo())
     index_start = time.time()
-    for (path,pst) in drecurse.recursive_dirlist([top], xdev=opt.xdev,
-                                                 bup_dir=bup_dir,
-                                                 excluded_paths=excluded_paths,
-                                                 exclude_rxs=exclude_rxs):
+    for path, pst in recursive_dirlist([top],
+                                       xdev=opt.xdev,
+                                       bup_dir=bup_dir,
+                                       excluded_paths=excluded_paths,
+                                       exclude_rxs=exclude_rxs,
+                                       xdev_exceptions=xdev_exceptions):
         if opt.verbose>=2 or (opt.verbose==1 and stat.S_ISDIR(pst.st_mode)):
             sys.stdout.write('%s\n' % path)
             sys.stdout.flush()
@@ -250,15 +253,14 @@ if opt.clear:
     log('clear: clearing index.\n')
     clear_index(indexfile)
 
-excluded_paths = parse_excludes(flags, o.fatal)
-exclude_rxs = parse_rx_excludes(flags, o.fatal)
-paths = index.reduce_paths(extra)
-
 if opt.update:
+    excluded_paths = parse_excludes(flags, o.fatal)
+    exclude_rxs = parse_rx_excludes(flags, o.fatal)
     if not extra:
         o.fatal('update mode (-u) requested but no paths given')
-    for (rp,path) in paths:
-        update_index(rp, excluded_paths, exclude_rxs)
+    for rp, path in index.reduce_paths(extra):
+        update_index(rp, excluded_paths, exclude_rxs,
+                     xdev_exceptions=index.unique_resolved_paths(extra))
 
 if opt['print'] or opt.status or opt.modified:
     for (name, ent) in index.Reader(indexfile).filter(extra or ['']):
