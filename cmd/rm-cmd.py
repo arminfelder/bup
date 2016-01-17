@@ -65,6 +65,37 @@ def rm_saves(saves, writer):
     return orig_tip, new_tip
 
 
+def dead_items(vfs_top, paths):
+    """Return an optimized set of removals, reporting errors via
+    add_error, and if there are any errors, return None, None."""
+    dead_branches = {}
+    dead_saves = {}
+    # Scan for bad requests, and opportunities to optimize.
+    for path in paths:
+        try:
+            n = vfs_top.lresolve(path)
+        except vfs.NodeError as e:
+            add_error('unable to resolve %s: %s' % (path, e))
+        else:
+            if isinstance(n, vfs.BranchList): # rm /foo
+                branchname = n.name
+                dead_branches[branchname] = n
+                dead_saves.pop(branchname, None) # rm /foo obviates rm /foo/bar
+            elif isinstance(n, vfs.FakeSymlink) and isinstance(n.parent,
+                                                               vfs.BranchList):
+                if n.name == 'latest':
+                    add_error("error: cannot delete 'latest' symlink")
+                else:
+                    branchname = n.parent.name
+                    if branchname not in dead_branches:
+                        dead_saves.setdefault(branchname, []).append(n)
+            else:
+                add_error("don't know how to remove %r yet" % n.fullname())
+    if saved_errors:
+        return None, None
+    return dead_branches, dead_saves
+
+
 handle_ctrl_c()
 
 o = options.Options(optspec)
@@ -81,30 +112,10 @@ paths = extra
 git.check_repo_or_die()
 top = vfs.RefList(None)
 
-dead_branches = {}
-dead_saves = {}
-
-# Scan for bad requests, and opportunities to optimize.
-for path in paths:
-    try:
-        n = top.lresolve(path)
-    except vfs.NodeError as e:
-        o.fatal(e)
-    if isinstance(n, vfs.BranchList): # rm /foo
-        branchname = n.name
-        dead_branches[branchname] = n
-        dead_saves.pop(branchname, None) # rm /foo obviates rm /foo/bar
-    elif isinstance(n, vfs.FakeSymlink) and isinstance(n.parent, vfs.BranchList):
-        if n.name == 'latest':
-            log("error: cannot delete 'latest' symlink")
-            sys.exit(1)
-        else:
-            branchname = n.parent.name
-            if branchname not in dead_branches:
-                dead_saves.setdefault(branchname, []).append(n)
-    else:
-        log("error: don't know how to remove %r yet" % n.fullname())
-        sys.exit(1)
+dead_branches, dead_saves = dead_items(top, paths)
+if saved_errors:
+    log('not proceeding with any removals\n')
+    sys.exit(1)
 
 updated_refs = {}  # ref_name -> (original_ref, tip_commit(bin))
 writer = None
